@@ -6,7 +6,7 @@
 // job-name when a Create-Job response is lost.
 //
 // The codec is deliberately defensive: it rejects illegal tags, duplicate
-// scalar attributes, duplicate attribute groups, attributes appearing
+// scalar attributes, duplicate singleton attribute groups, attributes appearing
 // before any group delimiter, truncated messages, mismatched
 // request-ids, unknown status codes and oversized fields. Every failure
 // is reported as a typed ProtoError so callers can record a stable
@@ -79,11 +79,11 @@ const (
 
 // IPP status codes.
 const (
-	StatusOK             uint16 = 0x0000
-	StatusOKIgnored      uint16 = 0x0001
-	StatusOKConflicting  uint16 = 0x0002
-	StatusClientError    uint16 = 0x0400
-	StatusServerError     uint16 = 0x0500
+	StatusOK            uint16 = 0x0000
+	StatusOKIgnored     uint16 = 0x0001
+	StatusOKConflicting uint16 = 0x0002
+	StatusClientError   uint16 = 0x0400
+	StatusServerError   uint16 = 0x0500
 )
 
 // isGroupTag reports whether b is a valid attribute-group delimiter.
@@ -260,9 +260,9 @@ func EncodeRequest(m *Message, data io.Reader) (io.Reader, error) {
 
 // Limits applied during decode to bound resource use.
 const (
-	MaxAttrs     = 4096
-	MaxStrLen    = 8192
-	MaxValLen    = 65535
+	MaxAttrs  = 4096
+	MaxStrLen = 8192
+	MaxValLen = 65535
 )
 
 // DecodeResponse reads and strictly validates a response message from r.
@@ -299,7 +299,9 @@ func DecodeResponse(r io.Reader, wantRequestID uint32) (*Message, error) {
 			break
 		}
 		if isGroupTag(b) {
-			if seenGroups[b] {
+			// Get-Jobs returns one job-attributes group per job. Other
+			// attribute group types remain singletons in supported responses.
+			if seenGroups[b] && b != TagJob {
 				return nil, protoErrf(ErrKindDuplicateGroup, "duplicate group 0x%02x", b)
 			}
 			seenGroups[b] = true

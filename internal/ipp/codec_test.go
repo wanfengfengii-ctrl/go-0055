@@ -2,10 +2,15 @@ package ipp
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"io"
+	"net/http"
+	"reflect"
 	"strings"
 	"testing"
+
+	"pressguard/internal/domain"
 )
 
 func TestEncodeDecodeRoundTrip(t *testing.T) {
@@ -115,19 +120,92 @@ func TestDecodeRejectsAttrWithoutGroup(t *testing.T) {
 	}
 }
 
-func TestDecodeRejectsDuplicateGroup(t *testing.T) {
-	var buf bytes.Buffer
-	binary.Write(&buf, binary.BigEndian, Version20)
-	binary.Write(&buf, binary.BigEndian, StatusOK)
-	binary.Write(&buf, binary.BigEndian, uint32(1))
-	buf.WriteByte(TagJob)
-	writeAttr(&buf, TagInteger, "job-id", int32(5))
-	buf.WriteByte(TagJob) // duplicate job group
-	writeAttr(&buf, TagEnum, "job-state", int32(9))
-	buf.WriteByte(TagEnd)
-	if _, err := DecodeResponse(&buf, 1); err == nil {
-		t.Fatal("expected duplicate-group error")
+func TestGetJobsDecodesMultipleJobGroups(t *testing.T) {
+	jobGroup := func(id int32, name string, state uint32) Group {
+		g := Group{Tag: TagJob}
+		g.AddInt("job-id", id)
+		g.AddString(TagName, "job-name", name)
+		g.AddEnum("job-state", state)
+		return g
 	}
+	operations := baseRequest("")
+
+	t.Run("single job", func(t *testing.T) {
+		client := newGetJobsTestClient(t, operations, jobGroup(5, "stable-5", JobStatePending))
+		got, err := client.GetJobs(context.Background())
+		if err != nil {
+			t.Fatalf("GetJobs: %v", err)
+		}
+		want := []JobInfo{{ID: 5, Name: "stable-5", State: domain.RemotePending}}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("jobs = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("multiple jobs", func(t *testing.T) {
+		client := newGetJobsTestClient(t, operations,
+			jobGroup(5, "stable-5", JobStatePending),
+			jobGroup(8, "stable-8", JobStateProcessing),
+		)
+		got, err := client.GetJobs(context.Background())
+		if err != nil {
+			t.Fatalf("GetJobs: %v", err)
+		}
+		want := []JobInfo{
+			{ID: 5, Name: "stable-5", State: domain.RemotePending},
+			{ID: 8, Name: "stable-8", State: domain.RemoteProcessing},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("jobs = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("duplicate non-job group", func(t *testing.T) {
+		client := newGetJobsTestClient(t, operations, operations)
+		_, err := client.GetJobs(context.Background())
+		if err == nil {
+			t.Fatal("expected duplicate-group error")
+		}
+		pe, ok := err.(*ProtoError)
+		if !ok || pe.Kind != ErrKindDuplicateGroup {
+			t.Fatalf("error = %v, want %s", err, ErrKindDuplicateGroup)
+		}
+	})
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func newGetJobsTestClient(t *testing.T, groups ...Group) *Client {
+	t.Helper()
+	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		request, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("read request: %v", err)
+		}
+		if len(request) < 8 {
+			t.Fatalf("request length = %d, want at least 8", len(request))
+		}
+		if operation := binary.BigEndian.Uint16(request[2:4]); operation != OpGetJobs {
+			t.Fatalf("operation = 0x%04x, want Get-Jobs", operation)
+		}
+		response := &Message{
+			Version:   Version20,
+			Code:      StatusOK,
+			RequestID: binary.BigEndian.Uint32(request[4:8]),
+			Groups:    groups,
+		}
+		body := readAll(t, EncodeRequestMustSucceed(t, response, nil))
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/ipp"}},
+			Body:       io.NopCloser(bytes.NewReader(body)),
+		}, nil
+	})}
+	return NewClient("printer-1", "http://printer.example/ipp", WithHTTPClient(httpClient))
 }
 
 func writeAttr(buf *bytes.Buffer, tag uint8, name string, val int32) {
