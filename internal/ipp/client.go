@@ -253,8 +253,9 @@ func (c *Client) CreateJob(ctx context.Context, token string) (int64, domain.Rem
 	ops := baseRequest("pressguard")
 	ops.AddString(TagURI, "printer-uri", c.uri)
 	ops.AddString(TagName, "job-name", token)
-	ops.AddString(TagKeyword, "job-hold-until", "indefinite")
-	m.Groups = []Group{ops}
+	tmpl := Group{Tag: TagJob}
+	tmpl.AddString(TagKeyword, "job-hold-until", "indefinite")
+	m.Groups = []Group{ops, tmpl}
 	resp, err := c.do(ctx, m, nil)
 	if err != nil {
 		return 0, domain.RemoteUnknown, err

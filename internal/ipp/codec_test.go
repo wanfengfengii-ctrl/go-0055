@@ -2,11 +2,83 @@ package ipp
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
+
+	"pressguard/internal/domain"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestCreateJobEncodesHoldUntilAsJobTemplateAttribute(t *testing.T) {
+	const (
+		printerURI = "http://strict-printer.test/ipp/print"
+		jobName    = "pressguard:job1:1"
+		jobID      = int32(73)
+	)
+
+	var got *Message
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		requestID := binary.BigEndian.Uint32(body[4:8])
+		got, err = DecodeResponse(bytes.NewReader(body), requestID)
+		if err != nil {
+			return nil, err
+		}
+
+		status := StatusClientError
+		printer := got.Find(TagOperations, "printer-uri")
+		name := got.Find(TagOperations, "job-name")
+		hold := got.Find(TagJob, "job-hold-until")
+		if got.Code == OpCreateJob &&
+			printer != nil && string(printer.Value) == printerURI &&
+			name != nil && string(name.Value) == jobName &&
+			got.Find(TagOperations, "job-hold-until") == nil &&
+			hold != nil && hold.Tag == TagKeyword && string(hold.Value) == "indefinite" {
+			status = StatusOK
+		}
+
+		response := &Message{Version: Version20, Code: status, RequestID: requestID}
+		if status == StatusOK {
+			job := Group{Tag: TagJob}
+			job.AddInt("job-id", jobID)
+			job.AddEnum("job-state", JobStatePendingHeld)
+			response.Groups = []Group{job}
+		}
+		encoded, err := EncodeRequest(response, nil)
+		if err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/ipp"}},
+			Body:       io.NopCloser(encoded),
+		}, nil
+	})
+
+	client := NewClient("strict-printer", printerURI, WithHTTPClient(&http.Client{Transport: transport}))
+	id, state, err := client.CreateJob(context.Background(), jobName)
+	if err != nil {
+		t.Fatalf("CreateJob against strict endpoint: %v", err)
+	}
+	if id != int64(jobID) {
+		t.Fatalf("job-id = %d, want %d", id, jobID)
+	}
+	if state != domain.RemoteHeld {
+		t.Fatalf("state = %q, want %q", state, domain.RemoteHeld)
+	}
+}
 
 func TestEncodeDecodeRoundTrip(t *testing.T) {
 	m := &Message{Version: Version20, Code: OpCreateJob, RequestID: 7}
