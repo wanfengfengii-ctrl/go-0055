@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -99,8 +101,15 @@ func (c *Client) do(ctx context.Context, m *Message, data io.Reader) (*Message, 
 	// encoding is acceptable for our (scripted) printers.
 	resp, err := c.httpc.Do(req)
 	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
+		switch ctxErr := ctx.Err(); ctxErr {
+		case context.DeadlineExceeded:
+			return nil, &ProtoError{Kind: ErrKindTimeout, Msg: ctxErr.Error()}
+		case context.Canceled:
 			return nil, &ProtoError{Kind: ErrKindCanceled, Msg: ctxErr.Error()}
+		}
+		var netErr net.Error
+		if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr) && netErr.Timeout() {
+			return nil, &ProtoError{Kind: ErrKindTimeout, Msg: err.Error()}
 		}
 		return nil, &ProtoError{Kind: ErrKindNetwork, Msg: err.Error()}
 	}

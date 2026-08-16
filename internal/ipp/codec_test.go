@@ -2,11 +2,71 @@ package ipp
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
+	"errors"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
+
+	"pressguard/internal/domain"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "transport timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
+
+func TestClientClassifiesHTTPRequestFailures(t *testing.T) {
+	deadlineCtx, cancelDeadline := context.WithDeadline(context.Background(), time.Unix(0, 0))
+	defer cancelDeadline()
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name      string
+		ctx       context.Context
+		transport error
+		wantKind  ErrKind
+		wantCode  domain.ErrorCode
+	}{
+		{name: "transport timeout", ctx: context.Background(), transport: timeoutError{}, wantKind: ErrKindTimeout, wantCode: domain.ErrTimeout},
+		{name: "context deadline", ctx: deadlineCtx, transport: errors.New("request failed"), wantKind: ErrKindTimeout, wantCode: domain.ErrTimeout},
+		{name: "network failure", ctx: context.Background(), transport: errors.New("connection reset"), wantKind: ErrKindNetwork, wantCode: domain.ErrNetwork},
+		{name: "explicit cancellation", ctx: canceledCtx, transport: errors.New("request failed"), wantKind: ErrKindCanceled, wantCode: domain.ErrCanceled},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := NewClient("printer", "http://printer.test/ipp", WithHTTPClient(&http.Client{
+				Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					return nil, tt.transport
+				}),
+			}))
+
+			_, err := client.GetPrinterAttributes(tt.ctx)
+			var protoErr *ProtoError
+			if !errors.As(err, &protoErr) {
+				t.Fatalf("error = %v, want *ProtoError", err)
+			}
+			if protoErr.Kind != tt.wantKind {
+				t.Errorf("ProtoError.Kind = %q, want %q", protoErr.Kind, tt.wantKind)
+			}
+			if got := Classify(err); got != tt.wantCode {
+				t.Errorf("Classify(error) = %q, want %q", got, tt.wantCode)
+			}
+		})
+	}
+}
 
 func TestEncodeDecodeRoundTrip(t *testing.T) {
 	m := &Message{Version: Version20, Code: OpCreateJob, RequestID: 7}
