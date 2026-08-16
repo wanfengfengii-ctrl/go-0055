@@ -99,10 +99,7 @@ func (c *Client) do(ctx context.Context, m *Message, data io.Reader) (*Message, 
 	// encoding is acceptable for our (scripted) printers.
 	resp, err := c.httpc.Do(req)
 	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, &ProtoError{Kind: ErrKindCanceled, Msg: ctxErr.Error()}
-		}
-		return nil, &ProtoError{Kind: ErrKindNetwork, Msg: err.Error()}
+		return nil, classifyDoError(ctx, err)
 	}
 	defer func() {
 		// Always drain and close so the connection can be reused / released.
