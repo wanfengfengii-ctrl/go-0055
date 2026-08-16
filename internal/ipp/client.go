@@ -253,8 +253,15 @@ func (c *Client) CreateJob(ctx context.Context, token string) (int64, domain.Rem
 	ops := baseRequest("pressguard")
 	ops.AddString(TagURI, "printer-uri", c.uri)
 	ops.AddString(TagName, "job-name", token)
-	ops.AddString(TagKeyword, "job-hold-until", "indefinite")
-	m.Groups = []Group{ops}
+	// job-hold-until is a Job Template attribute. Per IPP it MUST travel in
+	// its own job-template-attributes (job-attributes-tag, 0x02) group,
+	// after the operations-attributes group. Placing it in the operations
+	// group is rejected by strict printers as client-error-bad-request and
+	// is silently dropped by tolerant ones, which lets the job start
+	// printing once Send-Document completes, bypassing ReleaseJob.
+	tmpl := Group{Tag: TagJob}
+	tmpl.AddKeyword("job-hold-until", "indefinite")
+	m.Groups = []Group{ops, tmpl}
 	resp, err := c.do(ctx, m, nil)
 	if err != nil {
 		return 0, domain.RemoteUnknown, err
