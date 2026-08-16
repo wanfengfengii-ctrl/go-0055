@@ -279,8 +279,17 @@ func (c *Client) SendDocument(ctx context.Context, jobID int64, doc io.Reader, p
 	tmpl := Group{Tag: TagJob}
 	tmpl.AddInt("copies", 1)
 	ranges := parsePageRanges(pageRanges)
-	for _, r := range ranges {
-		tmpl.AddRange("page-ranges", r.lo, r.hi)
+	// page-ranges is a multi-valued rangeOfInteger attribute (RFC 8010):
+	// the first value carries the attribute name and every subsequent
+	// value carries an empty name (additional-value encoding). Emitting
+	// the name on each value makes strict IPP printers reject the request
+	// as a duplicate scalar (client-error-bad-request).
+	for i, r := range ranges {
+		name := "page-ranges"
+		if i > 0 {
+			name = ""
+		}
+		tmpl.AddRange(name, r.lo, r.hi)
 	}
 	m.Groups = []Group{ops, tmpl}
 	_, err := c.do(ctx, m, doc)
