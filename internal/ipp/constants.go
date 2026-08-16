@@ -299,7 +299,11 @@ func DecodeResponse(r io.Reader, wantRequestID uint32) (*Message, error) {
 			break
 		}
 		if isGroupTag(b) {
-			if seenGroups[b] {
+			// The job-attributes group (TagJob) legitimately repeats in a
+			// Get-Jobs response: the printer returns one such group per
+			// job. All other group tags are singletons, so a repeat is a
+			// genuine protocol error and is still rejected.
+			if b != TagJob && seenGroups[b] {
 				return nil, protoErrf(ErrKindDuplicateGroup, "duplicate group 0x%02x", b)
 			}
 			seenGroups[b] = true
