@@ -496,14 +496,14 @@ func finishingName(v []byte) (string, bool) {
 		return "", false
 	}
 	switch e {
-	case 3:
-		return "staple", true
 	case 4:
+		return "staple", true
+	case 5:
 		return "punch", true
 	case 7:
-		return "saddle-stitch", true
-	case 20:
 		return "bind", true
+	case 8:
+		return "saddle-stitch", true
 	}
 	return "", false
 }

@@ -2,11 +2,83 @@ package ipp
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"io"
+	"net/http"
+	"reflect"
 	"strings"
 	"testing"
+
+	"pressguard/internal/domain"
 )
+
+func TestGetPrinterAttributesMapsFinishingsSupported(t *testing.T) {
+	var printer Group
+	printer.Tag = TagPrinter
+	printer.AddString(TagKeyword, "media-supported", "A4")
+	printer.AddBool("color-supported", true)
+	printer.AddString(TagKeyword, "sides-supported", "two-sided-long-edge")
+	printer.AddString(TagMime, "document-format-supported", "application/pdf")
+	resolution := make([]byte, 9)
+	binary.BigEndian.PutUint32(resolution[0:4], 600)
+	binary.BigEndian.PutUint32(resolution[4:8], 600)
+	resolution[8] = 3 // dots per inch
+	printer.Add(TagResolution, "printer-resolution-supported", resolution)
+	for i, finishing := range []uint32{3, 4, 5, 7, 8, 999} {
+		name := "finishings-supported"
+		if i > 0 {
+			name = ""
+		}
+		value := make([]byte, 4)
+		binary.BigEndian.PutUint32(value, finishing)
+		printer.Add(TagEnum, name, value)
+	}
+
+	response := &Message{
+		Version:   Version20,
+		Code:      StatusOK,
+		RequestID: 1,
+		Groups:    []Group{printer},
+	}
+	body := readAll(t, EncodeRequestMustSucceed(t, response, nil))
+	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/ipp"}},
+			Body:       io.NopCloser(bytes.NewReader(body)),
+		}, nil
+	})}
+	client := NewClient("printer-1", "http://printer.test/ipp", WithHTTPClient(httpClient))
+
+	attrs, err := client.GetPrinterAttributes(context.Background())
+	if err != nil {
+		t.Fatalf("GetPrinterAttributes: %v", err)
+	}
+	wantBindings := []string{"staple", "punch", "bind", "saddle-stitch"}
+	if !reflect.DeepEqual(attrs.Cap.Binding, wantBindings) {
+		t.Fatalf("Binding = %v, want %v", attrs.Cap.Binding, wantBindings)
+	}
+	for _, binding := range append(wantBindings, "") {
+		spec := domain.JobSpec{
+			Media:      "A4",
+			Color:      "color",
+			Resolution: "600dpi",
+			Duplex:     true,
+			Format:     "application/pdf",
+			Binding:    binding,
+		}
+		if ok, missing := attrs.Cap.Supports(spec); !ok {
+			t.Errorf("Supports(binding=%q) = false, missing %v", binding, missing)
+		}
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 func TestEncodeDecodeRoundTrip(t *testing.T) {
 	m := &Message{Version: Version20, Code: OpCreateJob, RequestID: 7}
