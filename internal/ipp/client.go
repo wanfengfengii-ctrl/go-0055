@@ -488,22 +488,25 @@ func decodeResolution(v []byte) (struct{ x, y int32 }, bool) {
 	}, true
 }
 
-// finishingName maps an IPP finishings enum to a PressGuard binding name.
-// Only the small set we model is recognised.
+// finishingName maps a standard IPP finishings enum value (RFC 8011) to a
+// PressGuard binding name. Value 3 ("none") is the absence of finishing and
+// is not a binding capability, so it is ignored along with any value the
+// domain model does not recognise (cover, edge-stitch, the directional
+// staple variants 20..31, etc.).
 func finishingName(v []byte) (string, bool) {
 	e, ok := AsEnum(v)
 	if !ok {
 		return "", false
 	}
 	switch e {
-	case 3:
+	case FinishingsStaple:
 		return "staple", true
-	case 4:
+	case FinishingsPunch:
 		return "punch", true
-	case 7:
-		return "saddle-stitch", true
-	case 20:
+	case FinishingsBind:
 		return "bind", true
+	case FinishingsSaddleStitch:
+		return "saddle-stitch", true
 	}
 	return "", false
 }

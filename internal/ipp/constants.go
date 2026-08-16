@@ -77,6 +77,20 @@ const (
 	JobStateCompleted      uint32 = 9
 )
 
+// IPP finishings enum values, per RFC 8011. The finishings attribute is a
+// multi-valued enum where 3 ("none") denotes the absence of finishing and is
+// therefore not a binding capability. Only the base finishing options the
+// domain model recognises are listed here; other values (cover,
+// edge-stitch, fold, the directional staple variants 20..31, etc.) are
+// intentionally omitted and treated as unknown by finishingName.
+const (
+	FinishingsNone         uint32 = 3
+	FinishingsStaple       uint32 = 4
+	FinishingsPunch        uint32 = 5
+	FinishingsBind         uint32 = 7
+	FinishingsSaddleStitch uint32 = 8
+)
+
 // IPP status codes.
 const (
 	StatusOK             uint16 = 0x0000
