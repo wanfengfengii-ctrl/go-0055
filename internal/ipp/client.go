@@ -279,8 +279,12 @@ func (c *Client) SendDocument(ctx context.Context, jobID int64, doc io.Reader, p
 	tmpl := Group{Tag: TagJob}
 	tmpl.AddInt("copies", 1)
 	ranges := parsePageRanges(pageRanges)
-	for _, r := range ranges {
-		tmpl.AddRange("page-ranges", r.lo, r.hi)
+	for i, r := range ranges {
+		name := "page-ranges"
+		if i > 0 {
+			name = ""
+		}
+		tmpl.AddRange(name, r.lo, r.hi)
 	}
 	m.Groups = []Group{ops, tmpl}
 	_, err := c.do(ctx, m, doc)

@@ -2,8 +2,11 @@ package ipp
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"io"
+	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -29,6 +32,67 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 	if a == nil || string(a.Value) != "pressguard:job1:1" {
 		t.Fatalf("job-name missing: %+v", a)
 	}
+}
+
+func TestSendDocumentEncodesPageRangesAsMultiValue(t *testing.T) {
+	tests := []struct {
+		name       string
+		pageRanges string
+		want       []pageRange
+	}{
+		{name: "single page", pageRanges: "7", want: []pageRange{{7, 7}}},
+		{name: "duplex page pair", pageRanges: "1,2", want: []pageRange{{1, 1}, {2, 2}}},
+		{name: "multiple ranges", pageRanges: "1-2,4,6-8", want: []pageRange{{1, 2}, {4, 4}, {6, 8}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []pageRange
+			var decodeErr error
+			transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				defer req.Body.Close()
+				msg, err := DecodeResponse(req.Body, 1)
+				decodeErr = err
+				status := StatusOK
+				if err != nil {
+					status = StatusClientError
+				} else {
+					for _, value := range msg.FindAll(TagJob, "page-ranges") {
+						lo, hi, ok := AsRange(value)
+						if !ok {
+							status = StatusClientError
+							break
+						}
+						got = append(got, pageRange{lo: lo, hi: hi})
+					}
+				}
+
+				var response bytes.Buffer
+				_ = binary.Write(&response, binary.BigEndian, Version20)
+				_ = binary.Write(&response, binary.BigEndian, status)
+				_ = binary.Write(&response, binary.BigEndian, uint32(1))
+				response.WriteByte(TagEnd)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/ipp"}},
+					Body:       io.NopCloser(bytes.NewReader(response.Bytes())),
+				}, nil
+			})
+
+			client := NewClient("printer", "http://printer/ipp", WithHTTPClient(&http.Client{Transport: transport}))
+			if err := client.SendDocument(context.Background(), 42, strings.NewReader("pdf"), tt.pageRanges); err != nil {
+				t.Fatalf("SendDocument(%q): %v (strict decode: %v)", tt.pageRanges, err, decodeErr)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("page-ranges = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func EncodeRequestMustSucceed(t *testing.T, m *Message, data io.Reader) io.Reader {
